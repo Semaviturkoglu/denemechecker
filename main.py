@@ -18,7 +18,7 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 # --- BOT AYARLARI ---
-TOKEN = "8030336781:AAGUvdwGAXs9XimUw7VdsNGAKdCLEn7hcfk"
+TOKEN = "8030336781:AAGpJ7XFwDoe-gQxVam8zi-qimRWae6QRUE"
 ADMIN_IDS = [7272527047, 7995980007]
 ADMIN_USERNAMES = ["@Heroxcredit", "@ruhsuzjoker"]
 
@@ -95,30 +95,28 @@ def is_banned(user_id: int) -> bool:
     cursor.execute("SELECT 1 FROM banned_users WHERE user_id = ?", (user_id,)); result = cursor.fetchone(); conn.close()
     return result is not None
 
-# --- YENİ YARDIM KOMUTU ---
+# --- Komutlar ---
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     help_text = "🤖 **Zirve X Lordizm Checker Yardım Menüsü**\n\n"
     help_text += "Aşağıda kullanabileceğiniz komutların listesi ve açıklamaları bulunmaktadır.\n\n"
-    
     help_text += "👤 **Kullanıcı Komutları:**\n"
-    help_text += "`/start` - Botu başlatır ve kanal katılımını kontrol eder.\n"
+    help_text += "`/start` - Botu başlatır.\n"
     help_text += "`/check` - Kart check etme menüsünü açar.\n"
-    help_text += "`/me` - Kredi ve profil bilgilerinizi gösterir.\n"
-    help_text += "`/key <anahtar>` - Size verilen bir kullanım anahtarını aktif eder.\n"
+    help_text += "`/me` - Profil bilgilerinizi gösterir.\n"
+    help_text += "`/key <anahtar>` - Bir kullanım anahtarını aktif eder.\n"
     help_text += "`/help` - Bu yardım menüsünü gösterir.\n\n"
 
     if await is_admin(user_id):
         help_text += "👑 **Admin Komutları:**\n"
-        help_text += "`/uret <key> <süre>` - Yeni bir kullanım key'i üretir (süre saat cinsinden).\n"
-        help_text += "`/ban <id> <sebep>` - Bir kullanıcıyı bottan yasaklar.\n"
-        help_text += "`/profil <id>` - Bir kullanıcının profil bilgilerini görüntüler.\n"
-        help_text += "`/bakim <api_ismi>` - Belirtilen API'yi (Paypal/Exxen) bakıma alır.\n"
-        help_text += "`/aktifet <api_ismi>` - Bakımdaki bir API'yi aktif eder.\n"
+        help_text += "`/uret <key> <süre>` - Yeni bir key üretir.\n"
+        help_text += "`/ban <id> <sebep>` - Bir kullanıcıyı yasaklar.\n"
+        help_text += "`/profil <id>` - Bir kullanıcının profilini görüntüler.\n"
+        help_text += "`/bakim <api_ismi>` - API'yi bakıma alır.\n"
+        help_text += "`/aktifet <api_ismi>` - API'yi aktif eder.\n"
     
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
-# --- Admin Komutları ---
 async def uret_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update.effective_user.id): return
     try:
@@ -140,7 +138,7 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🚫 Kullanıcı `{user_id_to_ban}` yasaklandı. Sebep: {reason}", parse_mode=ParseMode.MARKDOWN)
         try:
             admin_contacts = " veya ".join(ADMIN_USERNAMES)
-            await context.bot.send_message(chat_id=user_id_to_ban, text=f"🚫 Bottan yasaklandınız.\n*Sebep:* {reason}\nİtiraz için yöneticiler ile iletişime geçin: {admin_contacts}", parse_mode=ParseMode.MARKDOWN)
+            await context.bot.send_message(chat_id=user_id_to_ban, text=f"🚫 Bottan yasaklandınız.\n*Sebep:* {reason}\nİtiraz için: {admin_contacts}", parse_mode=ParseMode.MARKDOWN)
         except Exception as e: await update.message.reply_text(f"Kullanıcıya bildirim gönderilemedi. Hata: {e}")
     except Exception: await update.message.reply_text("❌ Kullanım: `/ban 123456789 Spam`")
 
@@ -185,7 +183,6 @@ async def aktifet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ `{api_name}` API'si aktif edildi.", parse_mode=ParseMode.MARKDOWN)
     except IndexError: await update.message.reply_text("❌ Kullanım: `/aktifet Exxen`")
 
-# --- Kullanıcı Komutları ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if is_banned(user.id): await update.message.reply_text("🚫 Yasaklandınız."); return
@@ -298,9 +295,12 @@ async def choose_check_type_callback(update: Update, context: ContextTypes.DEFAU
 
 def check_card_api(card: str, api_type: str) -> str:
     try:
+        timeout_duration = 600  # 10 dakika = 600 saniye
         url = (PAYPAL_API_URL if api_type == 'paypal' else EXXEN_API_URL).format(card=quote(card))
-        response = requests.get(url, timeout=15); response.raise_for_status()
+        response = requests.get(url, timeout=timeout_duration); response.raise_for_status()
         return response.text
+    except requests.exceptions.Timeout:
+        return f"API Hatası: Sunucu {timeout_duration} saniye içinde cevap vermedi (Timed out)."
     except requests.exceptions.RequestException as e: return f"API Hatası: {e}"
     except Exception as e: return f"Bilinmeyen Hata: {e}"
 
@@ -373,21 +373,18 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 def main() -> None:
     setup_database()
     application = Application.builder().token(TOKEN).build()
-    
-    # Admin Komutları
+    # Admin
     application.add_handler(CommandHandler("uret", uret_command))
     application.add_handler(CommandHandler("ban", ban_command))
     application.add_handler(CommandHandler("profil", profil_command))
     application.add_handler(CommandHandler("bakim", bakim_command))
     application.add_handler(CommandHandler("aktifet", aktifet_command))
-    
-    # Kullanıcı Komutları
+    # User
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("key", key_command))
     application.add_handler(CommandHandler("me", me_command))
-    application.add_handler(CommandHandler("help", help_command)) # YENİ HANDLER
-    
-    # Conversation Handler
+    application.add_handler(CommandHandler("help", help_command))
+    # Conversation
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("check", check_command), CallbackQueryHandler(check_command, pattern='^go_to_check$')],
         states={
@@ -403,8 +400,7 @@ def main() -> None:
         per_message=False
     )
     application.add_handler(conv_handler)
-    
-    # Callback Handlers
+    # Callbacks
     application.add_handler(CallbackQueryHandler(join_check_callback, pattern='^join_check$'))
     application.add_handler(CallbackQueryHandler(disabled_callback, pattern='^disabled$'))
     application.add_handler(CallbackQueryHandler(main_menu_callback, pattern='^(show_me|use_key_prompt)$'))
