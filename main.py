@@ -120,12 +120,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def uret_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update.effective_user.id): return
     try:
-        _, key, sure_str = context.args; sure = int(sure_str)
-        conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
+        # HATALI YER BURASIYDI, ARTIK DOĞRU ÇALIŞIYOR
+        key, sure_str = context.args
+        sure = int(sure_str)
+        
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
         cursor.execute("INSERT OR IGNORE INTO keys (key_value, duration_hours) VALUES (?, ?)", (key, sure))
-        conn.commit(); conn.close()
+        conn.commit()
+        conn.close()
+        
         await update.message.reply_text(f"🔑 Key oluşturuldu: `{key}`, Süre: {sure} saat", parse_mode=ParseMode.MARKDOWN)
-    except Exception: await update.message.reply_text("❌ Kullanım: `/uret YENIKEY 24`")
+    except (ValueError, IndexError):
+        await update.message.reply_text("❌ Kullanım: `/uret YENIKEY 24`")
 
 async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update.effective_user.id): return
