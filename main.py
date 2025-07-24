@@ -18,7 +18,7 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 # --- BOT AYARLARI ---
-TOKEN = "8098364071:AAE10VAob4rv09fF_Jy9-flrgILjbB5AFWg"
+TOKEN = "8030336781:AAGpJ7XFwDoe-gQxVam8zi-qimRWae6QRUE"
 ADMIN_IDS = [7272527047, 7995980007]
 ADMIN_USERNAMES = ["@Heroxcredit", "@ruhsuzjoker"]
 
