@@ -18,7 +18,7 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 # --- BOT AYARLARI ---
-TOKEN = "8030336781:AAGpJ7XFwDoe-gQxVam8zi-qimRWae6QRUE"
+TOKEN = "8098364071:AAE10VAob4rv09fF_Jy9-flrgILjbB5AFWg"
 ADMIN_IDS = [7272527047, 7995980007]
 ADMIN_USERNAMES = ["@Heroxcredit", "@ruhsuzjoker"]
 
@@ -259,23 +259,65 @@ async def key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 CHOOSE_API, CHOOSE_CHECK_TYPE, SINGLE_CHECK, MASS_CHECK = range(4)
 
 async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    if update.callback_query:
+        await update.callback_query.answer()
+        user_id = update.callback_query.from_user.id; chat_id = update.effective_chat.id
+    else:
+        user_id = update.message.from_user.id; chat_id = update.effective_chat.id
+    
     if is_banned(user_id): return ConversationHandler.END
     if not await check_membership(user_id, context):
-        await update.message.reply_text("❗️ Check için TÜM kanallara katılmalısınız. /start atın."); return ConversationHandler.END
-    check_and_reset_credits(user_id)
-    user_data = get_user(user_id); credits = user_data[2]; key_active = user_data[4] is not None
+        await context.bot.send_message(chat_id=chat_id, text="❗️ Check için TÜM kanallara katılmalısınız. /start atın.")
+        return ConversationHandler.END
+    
+    check_and_reset_credits(user_id); user_data = get_user(user_id)
+    credits = user_data[2]; key_active = user_data[4] is not None
+    
     if not await is_admin(user_id) and not key_active and credits <= 0:
-        await update.message.reply_text("😔 Krediniz bitti."); return ConversationHandler.END
-    conn = sqlite3.connect(DB_NAME); c = conn.cursor(); c.execute("SELECT api_name, is_active FROM maintenance"); maintenance_status = {r[0]:bool(r[1]) for r in c.fetchall()}; conn.close()
+        await context.bot.send_message(chat_id=chat_id, text="😔 Krediniz bitti."); return ConversationHandler.END
+
+    conn = sqlite3.connect(DB_NAME); c = conn.cursor()
+    c.execute("SELECT api_name, is_active FROM maintenance"); maintenance_status = {r[0]:bool(r[1]) for r in c.fetchall()}; conn.close()
+    
     keyboard = []
     if maintenance_status.get('Paypal', True): keyboard.append([InlineKeyboardButton("💳 Paypal", callback_data="api_paypal")])
     else: keyboard.append([InlineKeyboardButton("🔧 Paypal (Bakımda)", callback_data="disabled")])
     if maintenance_status.get('Exxen', True): keyboard.append([InlineKeyboardButton("🎬 Exxen", callback_data="api_exxen")])
     else: keyboard.append([InlineKeyboardButton("🔧 Exxen (Bakımda)", callback_data="disabled")])
     keyboard.append([InlineKeyboardButton("❌ İptal", callback_data="cancel_check")])
-    await update.message.reply_text("API seçin:", reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    await context.bot.send_message(chat_id=chat_id, text="API seçin:", reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    if update.callback_query: await update.callback_query.message.delete()
+        
     return CHOOSE_API
+
+async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    user_id = query.from_user.id; username = query.from_user.username; chat_id = query.effective_chat.id
+
+    if query.data == 'show_me':
+        if await is_admin(user_id):
+            profil_mesaji = f"👑 **Patron Profili**\nKullanıcı: @{username}\nKredi: Sınırsız ♾️"
+            await context.bot.send_message(chat_id=chat_id, text=profil_mesaji, parse_mode=ParseMode.MARKDOWN); return
+
+        check_and_reset_credits(user_id); user = get_user(user_id)
+        if not user: await context.bot.send_message(chat_id=chat_id, text="Sisteme kayıtlı değilsiniz. /start atın."); return
+        _, db_username, credits, _, key_id, key_expires = user
+        profil_mesaji = f"👤 **Profiliniz**\nKullanıcı Adı: @{db_username}\n"
+        if key_id and key_expires:
+            expires_dt = datetime.datetime.fromisoformat(key_expires); kalan_sure = expires_dt - datetime.datetime.now()
+            if kalan_sure.total_seconds() > 0:
+                hours, rem = divmod(int(kalan_sure.total_seconds()), 3600); mins, _ = divmod(rem, 60)
+                profil_mesaji += f"Kredi: Sınırsız ♾️\nKalan Süre: {hours}s {mins}d ⏰\n"
+            else:
+                conn=sqlite3.connect(DB_NAME); c=conn.cursor(); c.execute("UPDATE users SET key_id=NULL,key_expires=NULL,credits=100 WHERE user_id=?",(user_id,)); conn.commit(); conn.close()
+                profil_mesaji += f"Kredi: 100 💳 (Key süreniz doldu)\n"
+        else: profil_mesaji += f"Kredi: {credits} 💳\n_Krediler her gün yenilenir._"
+        await context.bot.send_message(chat_id=chat_id, text=profil_mesaji, parse_mode=ParseMode.MARKDOWN)
+
+    elif query.data == 'use_key_prompt':
+        await context.bot.send_message(chat_id=chat_id, text="`/key <anahtar>` komutunu kullanarak anahtarınızı girin.", parse_mode=ParseMode.MARKDOWN)
 
 async def choose_api_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer(); context.user_data['api'] = query.data.split('_')[1]
@@ -295,56 +337,56 @@ async def choose_check_type_callback(update: Update, context: ContextTypes.DEFAU
 
 def check_card_api(card: str, api_type: str) -> str:
     try:
-        timeout_duration = 600  # 10 dakika = 600 saniye
+        timeout_duration = 600
         url = (PAYPAL_API_URL if api_type == 'paypal' else EXXEN_API_URL).format(card=quote(card))
         response = requests.get(url, timeout=timeout_duration); response.raise_for_status()
         return response.text
-    except requests.exceptions.Timeout:
-        return f"API Hatası: Sunucu {timeout_duration} saniye içinde cevap vermedi (Timed out)."
+    except requests.exceptions.Timeout: return f"API Hatası: Sunucu {timeout_duration} saniye içinde cevap vermedi (Timed out)."
     except requests.exceptions.RequestException as e: return f"API Hatası: {e}"
     except Exception as e: return f"Bilinmeyen Hata: {e}"
 
 async def single_check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    card_info = update.message.text; user_id = update.effective_user.id; api_type = context.user_data.get('api')
-    user_data = get_user(user_id); credits = user_data[2]; key_active = user_data[4] is not None
+    card_info=update.message.text; user_id=update.effective_user.id; api_type=context.user_data.get('api')
     is_user_admin = await is_admin(user_id)
-    if not is_user_admin and not key_active and credits <= 0:
-        await update.message.reply_text("😔 Krediniz bitti."); return ConversationHandler.END
+    if not is_user_admin:
+        user_data = get_user(user_id); credits = user_data[2]; key_active = user_data[4] is not None
+        if not key_active and credits <= 0: await update.message.reply_text("😔 Krediniz bitti."); return ConversationHandler.END
     parts = card_info.split('|')
     if len(parts) != 4 or not all(p.isdigit() for p in (parts[0], parts[1], parts[2], parts[3])):
         await update.message.reply_text("❌ Geçersiz format."); return SINGLE_CHECK
     msg = await update.message.reply_text("⏳ Kontrol ediliyor..."); api_response = check_card_api(card_info, api_type)
     await msg.edit_text(f"**Sonuç:**\n\n`{card_info}`\n`{api_response}`", parse_mode=ParseMode.MARKDOWN)
-    if not is_user_admin and not key_active:
-        conn = sqlite3.connect(DB_NAME); c = conn.cursor(); c.execute("UPDATE users SET credits = credits - 1 WHERE user_id = ?", (user_id,)); conn.commit(); conn.close()
+    if not is_user_admin and not (user_data and user_data[4] is not None):
+        conn=sqlite3.connect(DB_NAME); c=conn.cursor(); c.execute("UPDATE users SET credits=credits-1 WHERE user_id=?", (user_id,)); conn.commit(); conn.close()
     return ConversationHandler.END
     
 async def mass_check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id; api_type = context.user_data.get('api')
-    user_data = get_user(user_id); credits = user_data[2]; key_active = user_data[4] is not None; is_user_admin = await is_admin(user_id)
+    user_id=update.effective_user.id; api_type=context.user_data.get('api')
+    is_user_admin=await is_admin(user_id)
+    if not is_user_admin:
+        user_data=get_user(user_id); credits=user_data[2]; key_active=user_data[4] is not None
     if not update.message.document or not update.message.document.file_name.endswith('.txt'):
         await update.message.reply_text("Lütfen `.txt` dosyası gönderin."); return MASS_CHECK
     txt_file = await update.message.document.get_file()
-    cards = [line.strip() for line in (await txt_file.download_as_bytearray()).decode('utf-8').strip().split('\n') if line.strip()]
+    cards=[line.strip() for line in (await txt_file.download_as_bytearray()).decode('utf-8').strip().split('\n') if line.strip()]
     if not cards: await update.message.reply_text("❌ Dosya boş."); return ConversationHandler.END
     if not is_user_admin and not key_active and len(cards) > credits:
         await update.message.reply_text(f"😔 Yetersiz kredi. Gerekli: {len(cards)}, Mevcut: {credits}."); return ConversationHandler.END
     status_msg = await update.message.reply_text(f"✅ Dosya alındı. {len(cards)} kart kontrol ediliyor...")
     approved, declined, total_cards = [], [], len(cards)
     for i, card in enumerate(cards):
-        parts = card.split('|')
-        if len(parts) != 4 or not all(p.isdigit() for p in (parts[0], parts[1], parts[2], parts[3])):
-            declined.append(f"{card} | Geçersiz Format"); continue
-        api_response = check_card_api(card, api_type)
+        parts=card.split('|')
+        if len(parts) != 4 or not all(p.isdigit() for p in (parts[0],parts[1],parts[2],parts[3])): declined.append(f"{card}|Geçersiz Format"); continue
+        api_response=check_card_api(card, api_type)
         if "APPROVED" in api_response.upper() or "CVV MATCHED" in api_response.upper() or "SUCCESS" in api_response.upper(): approved.append(f"{card} | {api_response}")
         else: declined.append(f"{card} | {api_response}")
-        progress = i + 1; percentage = (progress / total_cards) * 100
-        bar = '█' * int(10 * progress // total_cards) + '─' * (10 - int(10 * progress // total_cards))
+        progress=i+1; percentage=(progress/total_cards)*100
+        bar='█'*int(10*progress//total_cards)+'─'*(10-int(10*progress//total_cards))
         if progress % 5 == 0 or progress == total_cards:
             try: await status_msg.edit_text(f"⏳ `{progress}/{total_cards}`\n[{bar}] {percentage:.1f}%\n\n✅: {len(approved)} | ❌: {len(declined)}", parse_mode=ParseMode.MARKDOWN); await asyncio.sleep(0.5)
             except Exception: pass
     if not is_user_admin and not key_active:
-        conn = sqlite3.connect(DB_NAME); c = conn.cursor(); c.execute("UPDATE users SET credits = credits - ? WHERE user_id = ?", (total_cards, user_id)); conn.commit(); conn.close()
+        conn=sqlite3.connect(DB_NAME); c=conn.cursor(); c.execute("UPDATE users SET credits=credits-? WHERE user_id=?",(total_cards,user_id)); conn.commit(); conn.close()
     await status_msg.delete()
     await update.message.reply_text(f"🏁 **Check Tamamlandı!**\nToplam: {total_cards}\n✅ Approved: {len(approved)}\n❌ Declined: {len(declined)}")
     if approved:
@@ -360,31 +402,33 @@ async def cancel_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def go_back_to_api_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await check_command(update.callback_query, context); return CHOOSE_API
+    await check_command(update, context); return CHOOSE_API
 
 async def disabled_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer("Bu API şu anda bakımda.", show_alert=True)
 
-async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
-    if query.data == 'show_me': await me_command(query, context)
-    elif query.data == 'use_key_prompt': await query.message.reply_text("`/key <anahtar>` komutunu kullanın.")
-
 def main() -> None:
     setup_database()
     application = Application.builder().token(TOKEN).build()
-    # Admin
-    application.add_handler(CommandHandler("uret", uret_command))
-    application.add_handler(CommandHandler("ban", ban_command))
-    application.add_handler(CommandHandler("profil", profil_command))
-    application.add_handler(CommandHandler("bakim", bakim_command))
-    application.add_handler(CommandHandler("aktifet", aktifet_command))
-    # User
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("key", key_command))
-    application.add_handler(CommandHandler("me", me_command))
-    application.add_handler(CommandHandler("help", help_command))
-    # Conversation
+    
+    # Komut Handlerları
+    handlers = [
+        CommandHandler("start", start_command),
+        CommandHandler("help", help_command),
+        CommandHandler("uret", uret_command),
+        CommandHandler("ban", ban_command),
+        CommandHandler("profil", profil_command),
+        CommandHandler("bakim", bakim_command),
+        CommandHandler("aktifet", aktifet_command),
+        CommandHandler("key", key_command),
+        CommandHandler("me", me_command),
+        CallbackQueryHandler(join_check_callback, pattern='^join_check$'),
+        CallbackQueryHandler(disabled_callback, pattern='^disabled$'),
+        CallbackQueryHandler(main_menu_callback, pattern='^(show_me|use_key_prompt)$')
+    ]
+    application.add_handlers(handlers)
+    
+    # Conversation Handler
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("check", check_command), CallbackQueryHandler(check_command, pattern='^go_to_check$')],
         states={
@@ -400,10 +444,6 @@ def main() -> None:
         per_message=False
     )
     application.add_handler(conv_handler)
-    # Callbacks
-    application.add_handler(CallbackQueryHandler(join_check_callback, pattern='^join_check$'))
-    application.add_handler(CallbackQueryHandler(disabled_callback, pattern='^disabled$'))
-    application.add_handler(CallbackQueryHandler(main_menu_callback, pattern='^(show_me|use_key_prompt)$'))
     
     print("Zirve X Lordizm Checker çalışıyor amk...")
     application.run_polling()
