@@ -19,7 +19,7 @@ from telegram.constants import ParseMode
 
 # --- BOT AYARLARI ---
 # Kanka buraya o verdiğin bilgileri kendin yapıştır.
-TOKEN = "8098364071:AAE10VAob4rv09fF_Jy9-flrgILjbB5AFWg"  # SENİN BOT TOKENİN
+TOKEN = "8098364071:AAF_INUyGlMibiQYY0yOORX8FMXCR3HVlxo"  # SENİN BOT TOKENİN
 ADMIN_ID = 7272527047  # SENİN TELEGRAM ID'N
 
 # Kanal ve Chat Kullanıcı Adları
