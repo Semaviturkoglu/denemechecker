@@ -1,5 +1,5 @@
 import logging
-# import sqlite3 # KALDIRILDI - aiosqlite kullanılıyor
+import sqlite3 # Sadece ilk kurulum için kalsın
 import aiosqlite # ASIL CANAVAR BU
 import aiofiles # BU DA ONUN YAVRUSU
 import datetime
@@ -40,8 +40,8 @@ DB_NAME = "bot_data.db"
 
 # --- SENKRON VERİTABANI KURULUMU (SADECE İLK ÇALIŞTIRMADA) ---
 def initial_setup_database():
-    conn = await aiosqlite.connect(DB_NAME)
-    cursor = await conn.cursor()
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY, username TEXT, credits INTEGER DEFAULT 100,
@@ -57,7 +57,7 @@ def initial_setup_database():
     try:
         cursor.execute("INSERT INTO maintenance (api_name) VALUES (?)", ('Paypal',))
         cursor.execute("INSERT INTO maintenance (api_name) VALUES (?)", ('Exxen',))
-    except aiosqlite.IntegrityError:
+    except sqlite3.IntegrityError:
         pass # Zaten varsa siktir et
     conn.commit()
     conn.close()
@@ -454,7 +454,7 @@ async def mass_check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     f"⏳ `{progress}/{total_cards}`\n[{bar}] {percentage:.1f}%\n\n✅: {len(approved)} | ❌: {len(declined)}",
                     parse_mode=ParseMode.MARKDOWN
                 )
-                # await asyncio.sleep(0.2)  # Kaldırıldı: sıra bekleme engellendi
+                await asyncio.sleep(0.2)
             except Exception:
                 pass
 
