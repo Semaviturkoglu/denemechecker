@@ -35,7 +35,7 @@ async def get_random_proxy():
     }
 # =======================================================
 
- sqlite3
+import sqlite3
 import datetime
 import asyncio
 from urllib.parse import quote
