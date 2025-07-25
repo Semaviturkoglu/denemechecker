@@ -1,9 +1,10 @@
 import logging
-import sqlite3 # Sadece ilk kurulum için kalsın, sonra aiosqlite kullanıcaz
-import aiosqlite # BU GELDİ AMINA KOYİM
-import aiofiles # BU DA GELDİ
+import sqlite3 # Sadece ilk kurulum için kalsın
+import aiosqlite # ASIL CANAVAR BU
+import aiofiles # BU DA ONUN YAVRUSU
 import datetime
 import asyncio
+import os # BU PİÇİ EKLEDİK
 from urllib.parse import quote
 
 import httpx
@@ -20,7 +21,7 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 # --- BOT AYARLARI ---
-TOKEN = "8030336781:AAEyeW7HxurMrFnss9Rsw9OzBq7f4b5KJzk"
+TOKEN = "8030336781:AAGcnUStBbfT_yGASaPuughMofbNdmM5dGU"
 ADMIN_IDS = [7272527047, 7995980007]
 ADMIN_USERNAMES = ["@Heroxcredit", "@ruhsuzjoker"]
 
@@ -53,7 +54,6 @@ def initial_setup_database():
     )""")
     cursor.execute("CREATE TABLE IF NOT EXISTS banned_users (user_id INTEGER PRIMARY KEY, reason TEXT)")
     cursor.execute("CREATE TABLE IF NOT EXISTS maintenance (api_name TEXT PRIMARY KEY, is_active INTEGER DEFAULT 1)")
-    # Bu kısımlar sadece bir kere çalışsa yeter amk
     try:
         cursor.execute("INSERT INTO maintenance (api_name) VALUES (?)", ('Paypal',))
         cursor.execute("INSERT INTO maintenance (api_name) VALUES (?)", ('Exxen',))
@@ -62,7 +62,7 @@ def initial_setup_database():
     conn.commit()
     conn.close()
 
-# --- ASENKRON YARDIMCI FONKSİYONLAR (İŞTE BÜTÜN OLAY BU AMK) ---
+# --- ASENKRON YARDIMCI FONKSİYONLAR ---
 async def is_admin(user_id: int) -> bool: return user_id in ADMIN_IDS
 
 async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -282,7 +282,12 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=chat_id, text="❗️ Check için TÜM kanallara katılmalısınız. /start atın.")
         return ConversationHandler.END
     
-    await check_and_reset_credits(user_id); user_data = await get_user(user_id)
+    await check_and_reset_credits(user_id)
+    user_data = await get_user(user_id)
+    if not user_data:
+        await context.bot.send_message(chat_id=chat_id, text="Sistemde kaydın yok, önce /start at amk.")
+        return ConversationHandler.END
+
     credits = user_data[2]; key_active = user_data[4] is not None
     
     if not await is_admin(user_id) and not key_active and credits <= 0:
@@ -352,7 +357,7 @@ async def choose_check_type_callback(update: Update, context: ContextTypes.DEFAU
 
 async def check_card_api(card: str, api_type: str) -> str:
     try:
-        timeout_duration = 600
+        timeout_duration = 60
         url = (PAYPAL_API_URL if api_type == 'paypal' else EXXEN_API_URL).format(card=quote(card))
         async with httpx.AsyncClient(timeout=timeout_duration) as client:
             response = await client.get(url)
@@ -367,7 +372,11 @@ async def single_check_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     is_user_admin = await is_admin(user_id)
     user_data = None
     if not is_user_admin:
-        user_data = await get_user(user_id); credits = user_data[2]; key_active = user_data[4] is not None
+        user_data = await get_user(user_id)
+        if not user_data:
+             await update.message.reply_text("Sistemde kaydın yok, önce /start at amk.")
+             return ConversationHandler.END
+        credits = user_data[2]; key_active = user_data[4] is not None
         if not key_active and credits <= 0: await update.message.reply_text("😔 Krediniz bitti."); return ConversationHandler.END
     parts = card_info.split('|')
     if len(parts) != 4 or not all(p.isdigit() for p in (parts[0], parts[1], parts[2], parts[3])):
@@ -382,60 +391,98 @@ async def single_check_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     return ConversationHandler.END
     
 async def mass_check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id=update.effective_user.id; api_type=context.user_data.get('api')
-    is_user_admin=await is_admin(user_id)
+    user_id = update.effective_user.id
+    api_type = context.user_data.get('api')
+    is_user_admin = await is_admin(user_id)
     key_active = False
+
     if not is_user_admin:
-        user_data=await get_user(user_id); credits=user_data[2]; key_active=user_data[4] is not None
+        user_data = await get_user(user_id)
+        if not user_data:
+            await update.message.reply_text("Sistemde kaydın yok, önce /start at amk.")
+            return ConversationHandler.END
+        credits = user_data[2]
+        key_active = user_data[4] is not None
+
     if not update.message.document or not update.message.document.file_name.endswith('.txt'):
-        await update.message.reply_text("Lütfen `.txt` dosyası gönderin."); return MASS_CHECK
+        await update.message.reply_text("Lütfen `.txt` dosyası gönderin.")
+        return MASS_CHECK
+
     txt_file = await update.message.document.get_file()
     file_content = await txt_file.download_as_bytearray()
-    cards=[line.strip() for line in file_content.decode('utf-8', errors='ignore').strip().split('\n') if line.strip()]
-    
-    if not cards: await update.message.reply_text("❌ Dosya boş."); return ConversationHandler.END
-    
-    if not is_user_admin and not key_active:
-        user_data=await get_user(user_id); credits=user_data[2]
-        if len(cards) > credits:
-            await update.message.reply_text(f"😔 Yetersiz kredi. Gerekli: {len(cards)}, Mevcut: {credits}."); return ConversationHandler.END
+    cards = [line.strip() for line in file_content.decode('utf-8', errors='ignore').strip().split('\n') if line.strip()]
 
-    status_msg = await update.message.reply_text(f"✅ Dosya alındı. {len(cards)} kart kontrol ediliyor...")
-    approved, declined, total_cards = [], [], len(cards)
+    if not cards:
+        await update.message.reply_text("❌ Dosya boş.")
+        return ConversationHandler.END
     
+    total_cards = len(cards)
+
+    if not is_user_admin and not key_active:
+        user_data = await get_user(user_id)
+        credits = user_data[2]
+        if total_cards > credits:
+            await update.message.reply_text(f"😔 Yetersiz kredi. Gerekli: {total_cards}, Mevcut: {credits}.")
+            return ConversationHandler.END
+
+    status_msg = await update.message.reply_text(f"✅ Dosya alındı. {total_cards} kart kontrol ediliyor...")
+    approved, declined = [], []
+
     tasks = [check_card_api(card, api_type) for card in cards]
     results = await asyncio.gather(*tasks, return_exceptions=True)
-
+    
     for i, (card, api_response) in enumerate(zip(cards, results)):
-        parts=card.split('|')
-        if len(parts) != 4 or not all(p.isdigit() for p in (parts[0],parts[1],parts[2],parts[3])): 
-            declined.append(f"{card}|Geçersiz Format"); continue
-        
+        parts = card.split('|')
+        if len(parts) != 4 or not all(p.isdigit() for p in (parts[0], parts[1], parts[2], parts[3])):
+            declined.append(f"{card}|Geçersiz Format")
+            continue
+
         if isinstance(api_response, Exception):
             declined.append(f"{card} | Hata: {api_response}")
-        elif "APPROVED" in api_response.upper() or "CVV MATCHED" in api_response.upper() or "SUCCESS" in api_response.upper(): 
+        elif "APPROVED" in str(api_response).upper() or "CVV MATCHED" in str(api_response).upper() or "SUCCESS" in str(api_response).upper():
             approved.append(f"{card} | {api_response}")
-        else: declined.append(f"{card} | {api_response}")
+        else:
+            declined.append(f"{card} | {api_response}")
         
-        progress=i+1; percentage=(progress/total_cards)*100
-        bar='█'*int(10*progress//total_cards)+'─'*(10-int(10*progress//total_cards))
-        if progress % 10 == 0 or progress == total_cards:
-            try: await status_msg.edit_text(f"⏳ `{progress}/{total_cards}`\n[{bar}] {percentage:.1f}%\n\n✅: {len(approved)} | ❌: {len(declined)}", parse_mode=ParseMode.MARKDOWN); await asyncio.sleep(0.1)
-            except Exception: pass
+        progress = i + 1
+        update_interval = total_cards // 20 or 1 
+        if progress % update_interval == 0 or progress == total_cards:
+            try:
+                percentage = (progress / total_cards) * 100
+                bar = '█' * int(10 * progress // total_cards) + '─' * (10 - int(10 * progress // total_cards))
+                await status_msg.edit_text(
+                    f"⏳ `{progress}/{total_cards}`\n[{bar}] {percentage:.1f}%\n\n✅: {len(approved)} | ❌: {len(declined)}",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                await asyncio.sleep(0.2)
+            except Exception:
+                pass
 
     if not is_user_admin and not key_active:
         async with aiosqlite.connect(DB_NAME) as db:
-            await db.execute("UPDATE users SET credits=credits-? WHERE user_id=?",(total_cards,user_id)); await db.commit()
-    
+            await db.execute("UPDATE users SET credits=credits-? WHERE user_id=?", (total_cards, user_id))
+            await db.commit()
+
     await status_msg.delete()
     await update.message.reply_text(f"🏁 **Check Tamamlandı!**\nToplam: {total_cards}\n✅ Approved: {len(approved)}\n❌ Declined: {len(declined)}")
     
-    if approved:
-        async with aiofiles.open("APPROVED.txt", "w", encoding="utf-8") as f: await f.write("\n".join(approved))
-        async with aiofiles.open("APPROVED.txt", "rb") as f: await update.message.reply_document(f, caption="✅ Approved Kartlar")
-    if declined:
-        async with aiofiles.open("DECLINED.txt", "w", encoding="utf-8") as f: await f.write("\n".join(declined))
-        async with aiofiles.open("DECLINED.txt", "rb") as f: await update.message.reply_document(f, caption="❌ Declined Kartlar")
+    try:
+        if approved:
+            approved_filename = f"APPROVED_{user_id}.txt"
+            async with aiofiles.open(approved_filename, "w", encoding="utf-8") as f:
+                await f.write("\n".join(approved))
+            await update.message.reply_document(document=approved_filename, caption="✅ Approved Kartlar")
+            os.remove(approved_filename)
+
+        if declined:
+            declined_filename = f"DECLINED_{user_id}.txt"
+            async with aiofiles.open(declined_filename, "w", encoding="utf-8") as f:
+                await f.write("\n".join(declined))
+            await update.message.reply_document(document=declined_filename, caption="❌ Declined Kartlar")
+            os.remove(declined_filename)
+            
+    except Exception as e:
+        await update.message.reply_text(f"Dosyaları gönderirken bir hata oldu amk: {e}")
 
     return ConversationHandler.END
 
@@ -450,12 +497,10 @@ async def disabled_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer("Bu API şu anda bakımda.", show_alert=True)
 
 def main() -> None:
-    # Bu sadece ilk başta veritabanı dosyası yoksa diye çalışacak.
     initial_setup_database()
     
     application = Application.builder().token(TOKEN).build()
     
-    # Komut Handlerları
     handlers = [
         CommandHandler("start", start_command),
         CommandHandler("help", help_command),
@@ -472,7 +517,6 @@ def main() -> None:
     ]
     application.add_handlers(handlers)
     
-    # Conversation Handler
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("check", check_command), CallbackQueryHandler(check_command, pattern='^go_to_check$')],
         states={
