@@ -5,26 +5,6 @@ import aiofiles # BU DA ONUN YAVRUSU
 import datetime
 import asyncio
 import os # BU PİÇİ EKLEDİK
-
-# ==================== PROXY SİSTEMİ ====================
-import random
-
-proxy_list = [
-    "http://103.169.187.146:8080",
-    "http://181.205.106.106:9812",
-    "http://45.70.15.4:999",
-    "http://193.138.178.6:8282",
-    "http://103.162.205.171:8181"
-]
-
-def get_random_proxy():
-    proxy = random.choice(proxy_list)
-    return {
-        "http://": proxy,
-        "https://": proxy
-    }
-# =======================================================
-
 from urllib.parse import quote
 
 import httpx
@@ -41,7 +21,7 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 # --- BOT AYARLARI ---
-TOKEN = "8030336781:AAFDSs1rnVtGd769JumeSkATndjF5otAreg"
+TOKEN = "8030336781:AAFF-Cz1cItw_2U5ssCOdYxgSGEUsjrq4_c"
 ADMIN_IDS = [7272527047, 7995980007]
 ADMIN_USERNAMES = ["@Heroxcredit", "@ruhsuzjoker"]
 
@@ -379,7 +359,7 @@ async def check_card_api(card: str, api_type: str) -> str:
     try:
         timeout_duration = 60
         url = (PAYPAL_API_URL if api_type == 'paypal' else EXXEN_API_URL).format(card=quote(card))
-        async with httpx.AsyncClient(proxies=get_random_proxy(), timeout=timeout_duration) as client:
+        async with httpx.AsyncClient(timeout=timeout_duration) as client:
             response = await client.get(url)
             response.raise_for_status()
             return response.text
