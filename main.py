@@ -4,7 +4,8 @@ import datetime
 import asyncio
 from urllib.parse import quote
 
-import requests
+# import requests # Bunu siktir et
+import httpx  # BU GELDİ AMK
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -120,7 +121,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def uret_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update.effective_user.id): return
     try:
-        # HATALI YER BURASIYDI, ARTIK DOĞRU ÇALIŞIYOR
         key, sure_str = context.args
         sure = int(sure_str)
         
@@ -342,14 +342,16 @@ async def choose_check_type_callback(update: Update, context: ContextTypes.DEFAU
         await query.edit_message_text("`.txt` dosyası gönder.", parse_mode=ParseMode.MARKDOWN); return MASS_CHECK
     return ConversationHandler.END
 
-def check_card_api(card: str, api_type: str) -> str:
+async def check_card_api(card: str, api_type: str) -> str:
     try:
         timeout_duration = 600
         url = (PAYPAL_API_URL if api_type == 'paypal' else EXXEN_API_URL).format(card=quote(card))
-        response = requests.get(url, timeout=timeout_duration); response.raise_for_status()
-        return response.text
-    except requests.exceptions.Timeout: return f"API Hatası: Sunucu {timeout_duration} saniye içinde cevap vermedi (Timed out)."
-    except requests.exceptions.RequestException as e: return f"API Hatası: {e}"
+        async with httpx.AsyncClient(timeout=timeout_duration) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            return response.text
+    except httpx.TimeoutException: return f"API Hatası: Sunucu {timeout_duration} saniye içinde cevap vermedi (Timed out)."
+    except httpx.RequestError as e: return f"API Hatası: {e}"
     except Exception as e: return f"Bilinmeyen Hata: {e}"
 
 async def single_check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -361,7 +363,8 @@ async def single_check_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     parts = card_info.split('|')
     if len(parts) != 4 or not all(p.isdigit() for p in (parts[0], parts[1], parts[2], parts[3])):
         await update.message.reply_text("❌ Geçersiz format."); return SINGLE_CHECK
-    msg = await update.message.reply_text("⏳ Kontrol ediliyor..."); api_response = check_card_api(card_info, api_type)
+    msg = await update.message.reply_text("⏳ Kontrol ediliyor...")
+    api_response = await check_card_api(card_info, api_type) # DEĞİŞİKLİK BURADA
     await msg.edit_text(f"**Sonuç:**\n\n`{card_info}`\n`{api_response}`", parse_mode=ParseMode.MARKDOWN)
     if not is_user_admin and not (user_data and user_data[4] is not None):
         conn=sqlite3.connect(DB_NAME); c=conn.cursor(); c.execute("UPDATE users SET credits=credits-1 WHERE user_id=?", (user_id,)); conn.commit(); conn.close()
@@ -384,7 +387,7 @@ async def mass_check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     for i, card in enumerate(cards):
         parts=card.split('|')
         if len(parts) != 4 or not all(p.isdigit() for p in (parts[0],parts[1],parts[2],parts[3])): declined.append(f"{card}|Geçersiz Format"); continue
-        api_response=check_card_api(card, api_type)
+        api_response = await check_card_api(card, api_type) # DEĞİŞİKLİK BURADA
         if "APPROVED" in api_response.upper() or "CVV MATCHED" in api_response.upper() or "SUCCESS" in api_response.upper(): approved.append(f"{card} | {api_response}")
         else: declined.append(f"{card} | {api_response}")
         progress=i+1; percentage=(progress/total_cards)*100
