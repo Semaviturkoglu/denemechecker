@@ -1,11 +1,12 @@
 import logging
-import sqlite3
+import sqlite3 # Sadece ilk kurulum için kalsın, sonra aiosqlite kullanıcaz
+import aiosqlite # BU GELDİ AMINA KOYİM
+import aiofiles # BU DA GELDİ
 import datetime
 import asyncio
 from urllib.parse import quote
 
-# import requests # Bunu siktir et
-import httpx  # BU GELDİ AMK
+import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -36,7 +37,8 @@ EXXEN_API_URL = "http://lordapis.xyz/exxen.php?kart={card}"
 # --- Veritabanı Ayarları ---
 DB_NAME = "bot_data.db"
 
-def setup_database():
+# --- SENKRON VERİTABANI KURULUMU (SADECE İLK ÇALIŞTIRMADA) ---
+def initial_setup_database():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("""
@@ -51,13 +53,16 @@ def setup_database():
     )""")
     cursor.execute("CREATE TABLE IF NOT EXISTS banned_users (user_id INTEGER PRIMARY KEY, reason TEXT)")
     cursor.execute("CREATE TABLE IF NOT EXISTS maintenance (api_name TEXT PRIMARY KEY, is_active INTEGER DEFAULT 1)")
-    cursor.execute("DELETE FROM maintenance WHERE api_name IN ('Auth', 'Puan')")
-    cursor.execute("INSERT OR IGNORE INTO maintenance (api_name) VALUES (?)", ('Paypal',))
-    cursor.execute("INSERT OR IGNORE INTO maintenance (api_name) VALUES (?)", ('Exxen',))
+    # Bu kısımlar sadece bir kere çalışsa yeter amk
+    try:
+        cursor.execute("INSERT INTO maintenance (api_name) VALUES (?)", ('Paypal',))
+        cursor.execute("INSERT INTO maintenance (api_name) VALUES (?)", ('Exxen',))
+    except sqlite3.IntegrityError:
+        pass # Zaten varsa siktir et
     conn.commit()
     conn.close()
 
-# --- Yardımcı Fonksiyonlar ---
+# --- ASENKRON YARDIMCI FONKSİYONLAR (İŞTE BÜTÜN OLAY BU AMK) ---
 async def is_admin(user_id: int) -> bool: return user_id in ADMIN_IDS
 
 async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -70,31 +75,32 @@ async def check_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> 
             return False
     return True
 
-def get_user(user_id: int):
-    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-    user_data = cursor.fetchone(); conn.close(); return user_data
+async def get_user(user_id: int):
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        user_data = await cursor.fetchone()
+        return user_data
 
-def update_or_create_user(user_id: int, username: str):
-    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-    today = datetime.date.today().isoformat()
-    cursor.execute("INSERT INTO users (user_id, username, last_credit_reset) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET username = excluded.username", (user_id, username, today))
-    conn.commit(); conn.close()
+async def update_or_create_user(user_id: int, username: str):
+    async with aiosqlite.connect(DB_NAME) as db:
+        today = datetime.date.today().isoformat()
+        await db.execute("INSERT INTO users (user_id, username, last_credit_reset) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET username = excluded.username", (user_id, username, today))
+        await db.commit()
     
-def check_and_reset_credits(user_id: int):
-    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-    today = datetime.date.today()
-    cursor.execute("SELECT last_credit_reset FROM users WHERE user_id = ?", (user_id,))
-    result = cursor.fetchone()
-    if result and datetime.datetime.strptime(result[0], '%Y-%m-%d').date() < today:
-        cursor.execute("UPDATE users SET credits = 100, last_credit_reset = ? WHERE user_id = ? AND key_id IS NULL", (today.isoformat(), user_id))
-        conn.commit()
-    conn.close()
+async def check_and_reset_credits(user_id: int):
+    async with aiosqlite.connect(DB_NAME) as db:
+        today = datetime.date.today()
+        cursor = await db.execute("SELECT last_credit_reset FROM users WHERE user_id = ?", (user_id,))
+        result = await cursor.fetchone()
+        if result and datetime.datetime.strptime(result[0], '%Y-%m-%d').date() < today:
+            await db.execute("UPDATE users SET credits = 100, last_credit_reset = ? WHERE user_id = ? AND key_id IS NULL", (today.isoformat(), user_id))
+            await db.commit()
 
-def is_banned(user_id: int) -> bool:
-    conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM banned_users WHERE user_id = ?", (user_id,)); result = cursor.fetchone(); conn.close()
-    return result is not None
+async def is_banned(user_id: int) -> bool:
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute("SELECT 1 FROM banned_users WHERE user_id = ?", (user_id,))
+        result = await cursor.fetchone()
+        return result is not None
 
 # --- Komutlar ---
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -123,13 +129,9 @@ async def uret_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         key, sure_str = context.args
         sure = int(sure_str)
-        
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR IGNORE INTO keys (key_value, duration_hours) VALUES (?, ?)", (key, sure))
-        conn.commit()
-        conn.close()
-        
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("INSERT OR IGNORE INTO keys (key_value, duration_hours) VALUES (?, ?)", (key, sure))
+            await db.commit()
         await update.message.reply_text(f"🔑 Key oluşturuldu: `{key}`, Süre: {sure} saat", parse_mode=ParseMode.MARKDOWN)
     except (ValueError, IndexError):
         await update.message.reply_text("❌ Kullanım: `/uret YENIKEY 24`")
@@ -139,9 +141,9 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id_to_ban = int(context.args[0])
         reason = " ".join(context.args[1:]) if len(context.args) > 1 else "Belirtilmedi"
-        conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-        cursor.execute("INSERT OR IGNORE INTO banned_users (user_id, reason) VALUES (?, ?)", (user_id_to_ban, reason))
-        conn.commit(); conn.close()
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("INSERT OR IGNORE INTO banned_users (user_id, reason) VALUES (?, ?)", (user_id_to_ban, reason))
+            await db.commit()
         await update.message.reply_text(f"🚫 Kullanıcı `{user_id_to_ban}` yasaklandı. Sebep: {reason}", parse_mode=ParseMode.MARKDOWN)
         try:
             admin_contacts = " veya ".join(ADMIN_USERNAMES)
@@ -153,7 +155,7 @@ async def profil_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_admin(update.effective_user.id): return
     try:
         user_id_to_check = int(context.args[0])
-        user_db = get_user(user_id_to_check)
+        user_db = await get_user(user_id_to_check)
         if not user_db: await update.message.reply_text("Kullanıcı bulunamadı."); return
         user_id, username, credits, _, key_id, key_expires = user_db
         profil_mesaji = f"👤 **Kullanıcı Profili**\nID: `{user_id}`\nKullanıcı Adı: @{username}\n"
@@ -175,8 +177,8 @@ async def bakim_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         api_name = context.args[0].capitalize()
         if api_name not in ['Paypal', 'Exxen']: await update.message.reply_text("❌ API 'Paypal' veya 'Exxen' olmalı."); return
-        conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-        cursor.execute("UPDATE maintenance SET is_active = 0 WHERE api_name = ?", (api_name,)); conn.commit(); conn.close()
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("UPDATE maintenance SET is_active = 0 WHERE api_name = ?", (api_name,)); await db.commit()
         await update.message.reply_text(f"🔧 `{api_name}` API'si bakıma alındı.", parse_mode=ParseMode.MARKDOWN)
     except IndexError: await update.message.reply_text("❌ Kullanım: `/bakim Paypal`")
 
@@ -185,15 +187,15 @@ async def aktifet_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         api_name = context.args[0].capitalize()
         if api_name not in ['Paypal', 'Exxen']: await update.message.reply_text("❌ API 'Paypal' veya 'Exxen' olmalı."); return
-        conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-        cursor.execute("UPDATE maintenance SET is_active = 1 WHERE api_name = ?", (api_name,)); conn.commit(); conn.close()
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("UPDATE maintenance SET is_active = 1 WHERE api_name = ?", (api_name,)); await db.commit()
         await update.message.reply_text(f"✅ `{api_name}` API'si aktif edildi.", parse_mode=ParseMode.MARKDOWN)
     except IndexError: await update.message.reply_text("❌ Kullanım: `/aktifet Exxen`")
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if is_banned(user.id): await update.message.reply_text("🚫 Yasaklandınız."); return
-    update_or_create_user(user.id, user.username)
+    if await is_banned(user.id): await update.message.reply_text("🚫 Yasaklandınız."); return
+    await update_or_create_user(user.id, user.username)
     if not await check_membership(user.id, context):
         keyboard = [[InlineKeyboardButton(f"🔗 {ch['name']}", url=f"https://t.me/{ch['username'].replace('@', '')}")] for ch in REQUIRED_CHANNELS]
         keyboard.append([InlineKeyboardButton("✅ Katıldım", callback_data="join_check")])
@@ -222,12 +224,12 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, cha
 
 async def me_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if is_banned(user_id): return
+    if await is_banned(user_id): return
     if await is_admin(user_id):
         await update.message.reply_text(f"👑 **Patron Profili**\nKullanıcı: @{update.effective_user.username}\nKredi: Sınırsız ♾️", parse_mode=ParseMode.MARKDOWN)
         return
-    check_and_reset_credits(user_id)
-    user = get_user(user_id)
+    await check_and_reset_credits(user_id)
+    user = await get_user(user_id)
     if not user: await update.message.reply_text("Sisteme kayıtlı değilsiniz. /start atın."); return
     _, username, credits, _, key_id, key_expires = user
     profil_mesaji = f"👤 **Profiliniz**\nKullanıcı Adı: @{username}\n"
@@ -238,7 +240,9 @@ async def me_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             hours, rem = divmod(int(kalan_sure.total_seconds()), 3600); mins, _ = divmod(rem, 60)
             profil_mesaji += f"Kredi: Sınırsız ♾️\nKalan Süre: {hours}s {mins}d ⏰\n"
         else:
-            conn=sqlite3.connect(DB_NAME); c=conn.cursor(); c.execute("UPDATE users SET key_id=NULL,key_expires=NULL,credits=100 WHERE user_id=?",(user_id,)); conn.commit(); conn.close()
+            async with aiosqlite.connect(DB_NAME) as db:
+                await db.execute("UPDATE users SET key_id=NULL,key_expires=NULL,credits=100 WHERE user_id=?",(user_id,))
+                await db.commit()
             profil_mesaji += f"Kredi: 100 💳 (Key süreniz doldu)\n"
     else:
         profil_mesaji += f"Kredi: {credits} 💳\n_Krediler her gün yenilenir._"
@@ -246,19 +250,20 @@ async def me_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if is_banned(user_id): return
+    if await is_banned(user_id): return
     try:
         user_key = context.args[0]
-        conn = sqlite3.connect(DB_NAME); cursor = conn.cursor()
-        cursor.execute("SELECT duration_hours, is_used FROM keys WHERE key_value = ?", (user_key,))
-        key_data = cursor.fetchone()
-        if not key_data: await update.message.reply_text("❌ Geçersiz key."); conn.close(); return
-        duration, is_used = key_data
-        if is_used: await update.message.reply_text("❌ Bu key daha önce kullanılmış."); conn.close(); return
-        now=datetime.datetime.now(); expires_at=now+datetime.timedelta(hours=duration)
-        cursor.execute("UPDATE keys SET is_used=1,used_by=?,used_at=? WHERE key_value=?",(user_id,now,user_key))
-        cursor.execute("UPDATE users SET key_id=?,key_expires=?,credits=99999 WHERE user_id=?",(user_key,expires_at.isoformat(),user_id))
-        conn.commit(); conn.close()
+        async with aiosqlite.connect(DB_NAME) as db:
+            cursor = await db.execute("SELECT duration_hours, is_used FROM keys WHERE key_value = ?", (user_key,))
+            key_data = await cursor.fetchone()
+            if not key_data: await update.message.reply_text("❌ Geçersiz key."); return
+            duration, is_used = key_data
+            if is_used: await update.message.reply_text("❌ Bu key daha önce kullanılmış."); return
+            
+            now=datetime.datetime.now(); expires_at=now+datetime.timedelta(hours=duration)
+            await db.execute("UPDATE keys SET is_used=1,used_by=?,used_at=? WHERE key_value=?",(user_id,now,user_key))
+            await db.execute("UPDATE users SET key_id=?,key_expires=?,credits=99999 WHERE user_id=?",(user_key,expires_at.isoformat(),user_id))
+            await db.commit()
         await update.message.reply_text(f"✅ Key aktif edildi! **{duration} saat** sınırsız check hakkı.", parse_mode=ParseMode.MARKDOWN)
     except IndexError: await update.message.reply_text("❌ Kullanım: `/key ABC-123`")
 
@@ -272,19 +277,21 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         user_id = update.message.from_user.id; chat_id = update.effective_chat.id
     
-    if is_banned(user_id): return ConversationHandler.END
+    if await is_banned(user_id): return ConversationHandler.END
     if not await check_membership(user_id, context):
         await context.bot.send_message(chat_id=chat_id, text="❗️ Check için TÜM kanallara katılmalısınız. /start atın.")
         return ConversationHandler.END
     
-    check_and_reset_credits(user_id); user_data = get_user(user_id)
+    await check_and_reset_credits(user_id); user_data = await get_user(user_id)
     credits = user_data[2]; key_active = user_data[4] is not None
     
     if not await is_admin(user_id) and not key_active and credits <= 0:
         await context.bot.send_message(chat_id=chat_id, text="😔 Krediniz bitti."); return ConversationHandler.END
 
-    conn = sqlite3.connect(DB_NAME); c = conn.cursor()
-    c.execute("SELECT api_name, is_active FROM maintenance"); maintenance_status = {r[0]:bool(r[1]) for r in c.fetchall()}; conn.close()
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute("SELECT api_name, is_active FROM maintenance")
+        rows = await cursor.fetchall()
+        maintenance_status = {r[0]:bool(r[1]) for r in rows}
     
     keyboard = []
     if maintenance_status.get('Paypal', True): keyboard.append([InlineKeyboardButton("💳 Paypal", callback_data="api_paypal")])
@@ -308,7 +315,7 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             profil_mesaji = f"👑 **Patron Profili**\nKullanıcı: @{username}\nKredi: Sınırsız ♾️"
             await context.bot.send_message(chat_id=chat_id, text=profil_mesaji, parse_mode=ParseMode.MARKDOWN); return
 
-        check_and_reset_credits(user_id); user = get_user(user_id)
+        await check_and_reset_credits(user_id); user = await get_user(user_id)
         if not user: await context.bot.send_message(chat_id=chat_id, text="Sisteme kayıtlı değilsiniz. /start atın."); return
         _, db_username, credits, _, key_id, key_expires = user
         profil_mesaji = f"👤 **Profiliniz**\nKullanıcı Adı: @{db_username}\n"
@@ -318,7 +325,8 @@ async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 hours, rem = divmod(int(kalan_sure.total_seconds()), 3600); mins, _ = divmod(rem, 60)
                 profil_mesaji += f"Kredi: Sınırsız ♾️\nKalan Süre: {hours}s {mins}d ⏰\n"
             else:
-                conn=sqlite3.connect(DB_NAME); c=conn.cursor(); c.execute("UPDATE users SET key_id=NULL,key_expires=NULL,credits=100 WHERE user_id=?",(user_id,)); conn.commit(); conn.close()
+                async with aiosqlite.connect(DB_NAME) as db:
+                    await db.execute("UPDATE users SET key_id=NULL,key_expires=NULL,credits=100 WHERE user_id=?",(user_id,)); await db.commit()
                 profil_mesaji += f"Kredi: 100 💳 (Key süreniz doldu)\n"
         else: profil_mesaji += f"Kredi: {credits} 💳\n_Krediler her gün yenilenir._"
         await context.bot.send_message(chat_id=chat_id, text=profil_mesaji, parse_mode=ParseMode.MARKDOWN)
@@ -357,54 +365,78 @@ async def check_card_api(card: str, api_type: str) -> str:
 async def single_check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     card_info=update.message.text; user_id=update.effective_user.id; api_type=context.user_data.get('api')
     is_user_admin = await is_admin(user_id)
+    user_data = None
     if not is_user_admin:
-        user_data = get_user(user_id); credits = user_data[2]; key_active = user_data[4] is not None
+        user_data = await get_user(user_id); credits = user_data[2]; key_active = user_data[4] is not None
         if not key_active and credits <= 0: await update.message.reply_text("😔 Krediniz bitti."); return ConversationHandler.END
     parts = card_info.split('|')
     if len(parts) != 4 or not all(p.isdigit() for p in (parts[0], parts[1], parts[2], parts[3])):
         await update.message.reply_text("❌ Geçersiz format."); return SINGLE_CHECK
     msg = await update.message.reply_text("⏳ Kontrol ediliyor...")
-    api_response = await check_card_api(card_info, api_type) # DEĞİŞİKLİK BURADA
+    api_response = await check_card_api(card_info, api_type)
     await msg.edit_text(f"**Sonuç:**\n\n`{card_info}`\n`{api_response}`", parse_mode=ParseMode.MARKDOWN)
     if not is_user_admin and not (user_data and user_data[4] is not None):
-        conn=sqlite3.connect(DB_NAME); c=conn.cursor(); c.execute("UPDATE users SET credits=credits-1 WHERE user_id=?", (user_id,)); conn.commit(); conn.close()
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("UPDATE users SET credits=credits-1 WHERE user_id=?", (user_id,))
+            await db.commit()
     return ConversationHandler.END
     
 async def mass_check_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id=update.effective_user.id; api_type=context.user_data.get('api')
     is_user_admin=await is_admin(user_id)
+    key_active = False
     if not is_user_admin:
-        user_data=get_user(user_id); credits=user_data[2]; key_active=user_data[4] is not None
+        user_data=await get_user(user_id); credits=user_data[2]; key_active=user_data[4] is not None
     if not update.message.document or not update.message.document.file_name.endswith('.txt'):
         await update.message.reply_text("Lütfen `.txt` dosyası gönderin."); return MASS_CHECK
     txt_file = await update.message.document.get_file()
-    cards=[line.strip() for line in (await txt_file.download_as_bytearray()).decode('utf-8').strip().split('\n') if line.strip()]
+    file_content = await txt_file.download_as_bytearray()
+    cards=[line.strip() for line in file_content.decode('utf-8', errors='ignore').strip().split('\n') if line.strip()]
+    
     if not cards: await update.message.reply_text("❌ Dosya boş."); return ConversationHandler.END
-    if not is_user_admin and not key_active and len(cards) > credits:
-        await update.message.reply_text(f"😔 Yetersiz kredi. Gerekli: {len(cards)}, Mevcut: {credits}."); return ConversationHandler.END
+    
+    if not is_user_admin and not key_active:
+        user_data=await get_user(user_id); credits=user_data[2]
+        if len(cards) > credits:
+            await update.message.reply_text(f"😔 Yetersiz kredi. Gerekli: {len(cards)}, Mevcut: {credits}."); return ConversationHandler.END
+
     status_msg = await update.message.reply_text(f"✅ Dosya alındı. {len(cards)} kart kontrol ediliyor...")
     approved, declined, total_cards = [], [], len(cards)
-    for i, card in enumerate(cards):
+    
+    tasks = [check_card_api(card, api_type) for card in cards]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for i, (card, api_response) in enumerate(zip(cards, results)):
         parts=card.split('|')
-        if len(parts) != 4 or not all(p.isdigit() for p in (parts[0],parts[1],parts[2],parts[3])): declined.append(f"{card}|Geçersiz Format"); continue
-        api_response = await check_card_api(card, api_type) # DEĞİŞİKLİK BURADA
-        if "APPROVED" in api_response.upper() or "CVV MATCHED" in api_response.upper() or "SUCCESS" in api_response.upper(): approved.append(f"{card} | {api_response}")
+        if len(parts) != 4 or not all(p.isdigit() for p in (parts[0],parts[1],parts[2],parts[3])): 
+            declined.append(f"{card}|Geçersiz Format"); continue
+        
+        if isinstance(api_response, Exception):
+            declined.append(f"{card} | Hata: {api_response}")
+        elif "APPROVED" in api_response.upper() or "CVV MATCHED" in api_response.upper() or "SUCCESS" in api_response.upper(): 
+            approved.append(f"{card} | {api_response}")
         else: declined.append(f"{card} | {api_response}")
+        
         progress=i+1; percentage=(progress/total_cards)*100
         bar='█'*int(10*progress//total_cards)+'─'*(10-int(10*progress//total_cards))
-        if progress % 5 == 0 or progress == total_cards:
-            try: await status_msg.edit_text(f"⏳ `{progress}/{total_cards}`\n[{bar}] {percentage:.1f}%\n\n✅: {len(approved)} | ❌: {len(declined)}", parse_mode=ParseMode.MARKDOWN); await asyncio.sleep(0.5)
+        if progress % 10 == 0 or progress == total_cards:
+            try: await status_msg.edit_text(f"⏳ `{progress}/{total_cards}`\n[{bar}] {percentage:.1f}%\n\n✅: {len(approved)} | ❌: {len(declined)}", parse_mode=ParseMode.MARKDOWN); await asyncio.sleep(0.1)
             except Exception: pass
+
     if not is_user_admin and not key_active:
-        conn=sqlite3.connect(DB_NAME); c=conn.cursor(); c.execute("UPDATE users SET credits=credits-? WHERE user_id=?",(total_cards,user_id)); conn.commit(); conn.close()
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("UPDATE users SET credits=credits-? WHERE user_id=?",(total_cards,user_id)); await db.commit()
+    
     await status_msg.delete()
     await update.message.reply_text(f"🏁 **Check Tamamlandı!**\nToplam: {total_cards}\n✅ Approved: {len(approved)}\n❌ Declined: {len(declined)}")
+    
     if approved:
-        with open("APPROVED.txt", "w", encoding="utf-8") as f: f.write("\n".join(approved))
-        await update.message.reply_document(open("APPROVED.txt", "rb"), caption="✅ Approved Kartlar")
+        async with aiofiles.open("APPROVED.txt", "w", encoding="utf-8") as f: await f.write("\n".join(approved))
+        async with aiofiles.open("APPROVED.txt", "rb") as f: await update.message.reply_document(f, caption="✅ Approved Kartlar")
     if declined:
-        with open("DECLINED.txt", "w", encoding="utf-8") as f: f.write("\n".join(declined))
-        await update.message.reply_document(open("DECLINED.txt", "rb"), caption="❌ Declined Kartlar")
+        async with aiofiles.open("DECLINED.txt", "w", encoding="utf-8") as f: await f.write("\n".join(declined))
+        async with aiofiles.open("DECLINED.txt", "rb") as f: await update.message.reply_document(f, caption="❌ Declined Kartlar")
+
     return ConversationHandler.END
 
 async def cancel_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -418,7 +450,9 @@ async def disabled_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer("Bu API şu anda bakımda.", show_alert=True)
 
 def main() -> None:
-    setup_database()
+    # Bu sadece ilk başta veritabanı dosyası yoksa diye çalışacak.
+    initial_setup_database()
+    
     application = Application.builder().token(TOKEN).build()
     
     # Komut Handlerları
