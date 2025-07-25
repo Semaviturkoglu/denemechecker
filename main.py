@@ -52,6 +52,7 @@ from telegram.ext import (
     filters,
 )
 from telegram.constants import ParseMode
+import logging
 
 # --- BOT AYARLARI ---
 TOKEN = "8030336781:AAHgDD8_pZknfn6hjpaqkSvg_B2qRnLzhF8"
