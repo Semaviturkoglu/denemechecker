@@ -1,5 +1,41 @@
-import logging
-import sqlite3
+
+# ==================== PROXY SİSTEMİ ====================
+import asyncio
+import random
+import httpx
+
+proxy_sources = [
+    "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all&ssl=all&anonymity=anonymous",
+    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt"
+]
+
+proxies_cache = []
+
+async def fetch_proxies():
+    global proxies_cache
+    proxies_cache.clear()
+    for url in proxy_sources:
+        try:
+            async with httpx.AsyncClient(proxies=await get_random_proxy()) as client:
+                res = await client.get(url, timeout=10)
+                if res.status_code == 200:
+                    new_proxies = [line.strip() for line in res.text.splitlines() if line.strip()]
+                    proxies_cache.extend(new_proxies)
+        except:
+            continue
+    random.shuffle(proxies_cache)
+
+async def get_random_proxy():
+    if not proxies_cache:
+        await fetch_proxies()
+    proxy = random.choice(proxies_cache)
+    return {
+        "http://": f"http://{proxy}",
+        "https://": f"http://{proxy}"
+    }
+# =======================================================
+
+ sqlite3
 import datetime
 import asyncio
 from urllib.parse import quote
@@ -318,7 +354,7 @@ async def check_card_api(card: str, api_type: str) -> str:
     timeout_duration = 600
     url = (PAYPAL_API_URL if api_type == 'paypal' else EXXEN_API_URL).format(card=quote(card))
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(proxies=await get_random_proxy()) as client:
             response = await client.get(url, timeout=timeout_duration)
             response.raise_for_status()
         return response.text
